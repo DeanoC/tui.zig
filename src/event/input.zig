@@ -383,7 +383,21 @@ pub const InputReader = struct {
 
         if (bytes.len == 0) return null;
 
-        const cp = std.unicode.utf8Decode(bytes) catch {
+        // utf8Decode expects exactly one codepoint (1..4 bytes). Input poll may
+        // return multiple bytes at once, so decode only the first sequence.
+        const seq_len = std.unicode.utf8ByteSequenceLength(bytes[0]) catch {
+            return Event{
+                .key = .{ .key = .{ .char = replacement_char } },
+            };
+        };
+
+        if (bytes.len < seq_len) {
+            return Event{
+                .key = .{ .key = .{ .char = replacement_char } },
+            };
+        }
+
+        const cp = std.unicode.utf8Decode(bytes[0..seq_len]) catch {
             // Return replacement character for invalid UTF-8
             // The caller should advance by 1 byte to skip the problematic byte
             return Event{
@@ -452,4 +466,14 @@ test "control character parsing" {
     // Ctrl+C
     const event = try reader.parse(&.{0x03});
     try std.testing.expect(event != null);
+}
+
+test "utf8 parsing handles multi-byte input chunks without panicking" {
+    const allocator = std.testing.allocator;
+    var reader = InputReader.init(allocator);
+
+    const event = try reader.parse("hello");
+    try std.testing.expect(event != null);
+    try std.testing.expect(event.? == .key);
+    try std.testing.expectEqual(@as(u21, 'h'), event.?.key.key.char);
 }
