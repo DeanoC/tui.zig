@@ -617,3 +617,45 @@ test "app creation" {
     try std.testing.expect(app.fps_counter.total_time == 960);
     try std.testing.expect(app.fps_counter.index == 0);
 }
+
+test "processed consumed event requests redraw" {
+    const DummyRoot = struct {
+        fn render(_: *@This(), _: *RenderContext) void {}
+        fn handleEvent(_: *@This(), _: Event) widget.EventResult {
+            return .consumed;
+        }
+    };
+
+    var app = try App.init(.{});
+    defer app.deinit();
+
+    var root = DummyRoot{};
+    try app.setRoot(&root);
+
+    app.needs_redraw = false;
+    try app.event_queue.push(Event{
+        .key = .{
+            .key = .{ .char = 'a' },
+            .modifiers = .{},
+        },
+    });
+
+    app.processEvents();
+    try std.testing.expect(app.needs_redraw);
+}
+
+test "ctrl-c ETX char quits app" {
+    var app = try App.init(.{});
+    defer app.deinit();
+
+    app.should_quit = false;
+    try app.event_queue.push(Event{
+        .key = .{
+            .key = .{ .char = 0x03 },
+            .modifiers = .{},
+        },
+    });
+
+    app.processEvents();
+    try std.testing.expect(app.should_quit);
+}
