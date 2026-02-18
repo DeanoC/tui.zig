@@ -383,22 +383,12 @@ pub const InputReader = struct {
 
         if (bytes.len == 0) return null;
 
-        const cp = std.unicode.utf8Decode(bytes) catch |err| switch (err) {
-            error.InvalidStartByte,
-            error.UnexpectedSecondByte,
-            error.ExpectedSecondByte,
-            error.ExpectedThirdByte,
-            error.ExpectedFourthByte,
-            error.Overlong,
-            error.Utf8CannotEncodeSurrogateHalf,
-            error.CodepointTooLarge,
-            => {
-                // Return replacement character for invalid UTF-8
-                // The caller should advance by 1 byte to skip the problematic byte
-                return Event{
-                    .key = .{ .key = .{ .char = replacement_char } },
-                };
-            },
+        const cp = std.unicode.utf8Decode(bytes) catch {
+            // Return replacement character for invalid UTF-8
+            // The caller should advance by 1 byte to skip the problematic byte
+            return Event{
+                .key = .{ .key = .{ .char = replacement_char } },
+            };
         };
 
         return Event{
