@@ -374,14 +374,31 @@ pub const InputReader = struct {
         };
     }
 
+    /// Unicode replacement character for invalid UTF-8 sequences
+    const replacement_char: u21 = 0xFFFD;
+
     /// Parse UTF-8 character
     fn parseUtf8Char(self: *InputReader, bytes: []const u8) ?Event {
         _ = self;
 
-        const cp = std.unicode.utf8Decode(bytes) catch {
-            return Event{
-                .key = .{ .key = .{ .unknown = bytes[0] } },
-            };
+        if (bytes.len == 0) return null;
+
+        const cp = std.unicode.utf8Decode(bytes) catch |err| switch (err) {
+            error.InvalidStartByte,
+            error.UnexpectedSecondByte,
+            error.ExpectedSecondByte,
+            error.ExpectedThirdByte,
+            error.ExpectedFourthByte,
+            error.Overlong,
+            error.Utf8CannotEncodeSurrogateHalf,
+            error.CodepointTooLarge,
+            => {
+                // Return replacement character for invalid UTF-8
+                // The caller should advance by 1 byte to skip the problematic byte
+                return Event{
+                    .key = .{ .key = .{ .char = replacement_char } },
+                };
+            },
         };
 
         return Event{
