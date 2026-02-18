@@ -75,6 +75,34 @@ const InputThreadContext = struct {
     has_event: *bool,
 };
 
+const windows_KEY_EVENT: u16 = 0x0001;
+const windows_LEFT_ALT_PRESSED: u32 = 0x0002;
+const windows_RIGHT_ALT_PRESSED: u32 = 0x0001;
+const windows_LEFT_CTRL_PRESSED: u32 = 0x0008;
+const windows_RIGHT_CTRL_PRESSED: u32 = 0x0004;
+const windows_SHIFT_PRESSED: u32 = 0x0010;
+
+const WindowsKeyEventRecord = extern struct {
+    bKeyDown: i32,
+    wRepeatCount: u16,
+    wVirtualKeyCode: u16,
+    wVirtualScanCode: u16,
+    uChar: extern union {
+        UnicodeChar: u16,
+        AsciiChar: u8,
+    },
+    dwControlKeyState: u32,
+};
+
+const WindowsInputRecord = extern struct {
+    EventType: u16,
+    _padding: u16,
+    Event: extern union {
+        KeyEvent: WindowsKeyEventRecord,
+        _pad: [16]u8,
+    },
+};
+
 /// Main application struct
 pub const App = struct {
     allocator: std.mem.Allocator,
@@ -286,43 +314,129 @@ pub const App = struct {
 
     /// Input thread function - runs in background reading input
     fn inputThreadFn(ctx: InputThreadContext) void {
-        const stdin = if (builtin.os.tag == .windows)
-            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
-        else
-            std.fs.File{ .handle = std.posix.STDIN_FILENO };
+        if (builtin.os.tag == .windows) {
+            inputThreadWindows(ctx);
+            return;
+        }
 
+        const stdin = std.fs.File{ .handle = std.posix.STDIN_FILENO };
         var buf: [32]u8 = undefined;
 
         while (ctx.state.* == .running and !ctx.should_quit.*) {
-            // Read input (blocking is fine here - we're on a separate thread)
             const bytes_read = stdin.read(&buf) catch |err| {
                 if (err == error.WouldBlock) {
-                    std.Thread.sleep(1_000_000); // 1ms sleep before retry
+                    std.Thread.sleep(1_000_000);
                     continue;
                 }
-                // Other errors - log and continue
                 std.log.err("Input read error: {s}", .{@errorName(err)});
                 continue;
             };
 
             if (bytes_read == 0) continue;
 
-            // Parse input into events
             if (ctx.input_reader.parse(buf[0..bytes_read]) catch null) |event| {
-                ctx.mutex.lock();
-                defer ctx.mutex.unlock();
-
-                ctx.event_queue.push(event) catch |err| {
-                    std.log.err("Failed to push event: {s}", .{@errorName(err)});
-                    return;
-                };
-
-                ctx.has_event.* = true;
-                ctx.cond.signal();
+                if (!pushInputEvent(ctx, event)) return;
             }
         }
     }
 
+    fn inputThreadWindows(ctx: InputThreadContext) void {
+        const kernel32 = struct {
+            extern "kernel32" fn GetNumberOfConsoleInputEvents(
+                hConsoleInput: std.os.windows.HANDLE,
+                lpcNumberOfEvents: *u32,
+            ) callconv(.winapi) std.os.windows.BOOL;
+            extern "kernel32" fn ReadConsoleInputW(
+                hConsoleInput: std.os.windows.HANDLE,
+                lpBuffer: [*]WindowsInputRecord,
+                nLength: u32,
+                lpNumberOfEventsRead: *u32,
+            ) callconv(.winapi) std.os.windows.BOOL;
+        };
+
+        const stdin_handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return;
+
+        while (ctx.state.* == .running and !ctx.should_quit.*) {
+            var pending: u32 = 0;
+            if (kernel32.GetNumberOfConsoleInputEvents(stdin_handle, &pending) == 0 or pending == 0) {
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            }
+
+            var record: WindowsInputRecord = undefined;
+            var read_count: u32 = 0;
+            if (kernel32.ReadConsoleInputW(stdin_handle, @ptrCast(&record), 1, &read_count) == 0 or read_count == 0) {
+                std.Thread.sleep(1 * std.time.ns_per_ms);
+                continue;
+            }
+
+            if (record.EventType != windows_KEY_EVENT) continue;
+            if (record.Event.KeyEvent.bKeyDown == 0) continue;
+
+            if (decodeWindowsKeyEvent(record.Event.KeyEvent)) |event| {
+                if (!pushInputEvent(ctx, event)) return;
+            }
+        }
+    }
+
+    fn pushInputEvent(ctx: InputThreadContext, event: Event) bool {
+        ctx.mutex.lock();
+        defer ctx.mutex.unlock();
+
+        ctx.event_queue.push(event) catch |err| {
+            std.log.err("Failed to push event: {s}", .{@errorName(err)});
+            return false;
+        };
+
+        ctx.has_event.* = true;
+        ctx.cond.signal();
+        return true;
+    }
+
+    fn decodeWindowsKeyEvent(raw: WindowsKeyEventRecord) ?Event {
+        var mods = events.Modifiers{};
+        mods.shift = (raw.dwControlKeyState & windows_SHIFT_PRESSED) != 0;
+        mods.ctrl = (raw.dwControlKeyState & (windows_LEFT_CTRL_PRESSED | windows_RIGHT_CTRL_PRESSED)) != 0;
+        mods.alt = (raw.dwControlKeyState & (windows_LEFT_ALT_PRESSED | windows_RIGHT_ALT_PRESSED)) != 0;
+
+        const unicode_char = raw.uChar.UnicodeChar;
+        if (unicode_char != 0) {
+            const key = switch (unicode_char) {
+                0x08 => input.Key.backspace,
+                0x09 => input.Key.tab,
+                0x0A, 0x0D => input.Key.enter,
+                0x1B => input.Key.escape,
+                else => blk: {
+                    if (unicode_char < 27 and unicode_char > 0) {
+                        mods.ctrl = true;
+                        break :blk input.Key{ .char = @as(u21, unicode_char) + 'a' - 1 };
+                    }
+                    break :blk input.Key{ .char = unicode_char };
+                },
+            };
+            return Event{ .key = .{ .key = key, .modifiers = mods } };
+        }
+
+        const key = switch (raw.wVirtualKeyCode) {
+            0x08 => input.Key.backspace,
+            0x09 => input.Key.tab,
+            0x0D => input.Key.enter,
+            0x1B => input.Key.escape,
+            0x21 => input.Key.page_up,
+            0x22 => input.Key.page_down,
+            0x23 => input.Key.end,
+            0x24 => input.Key.home,
+            0x25 => input.Key.left,
+            0x26 => input.Key.up,
+            0x27 => input.Key.right,
+            0x28 => input.Key.down,
+            0x2D => input.Key.insert,
+            0x2E => input.Key.delete,
+            0x70...0x7B => input.Key{ .f = @intCast(raw.wVirtualKeyCode - 0x70 + 1) },
+            else => return null,
+        };
+        return Event{ .key = .{ .key = key, .modifiers = mods } };
+    }
     /// Run a single frame
     fn runFrame(self: *App) !void {
         const current_time = std.time.nanoTimestamp();
