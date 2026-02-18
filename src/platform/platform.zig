@@ -40,7 +40,7 @@ pub const PosixHandle = struct {
     original_termios: ?std.posix.termios = null,
 
     pub fn init() PosixHandle {
-        return .{ .fd = std.posix.STDOUT_FILENO };
+        return .{ .fd = std.posix.STDIN_FILENO };
     }
 
     pub fn getInputFd() std.posix.fd_t {
