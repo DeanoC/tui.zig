@@ -226,14 +226,20 @@ fn enableWindowsRawMode(handle: *WindowsHandle) !void {
     const DISABLE_NEWLINE_AUTO_RETURN: u32 = 0x0008;
     _ = kernel32.SetConsoleMode(handle.stdout_handle, handle.original_output_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN);
 
-    // Configure input mode
+    // Configure input mode for byte-stream reads (InputReader parser path).
+    // Keep ENABLE_PROCESSED_INPUT so Ctrl+C still triggers a console break.
+    // Disable line buffering/echo for immediate key handling.
     const ENABLE_EXTENDED_FLAGS: u32 = 0x0080;
     const ENABLE_WINDOW_INPUT: u32 = 0x0008;
     const ENABLE_MOUSE_INPUT: u32 = 0x0010;
-    // Keep keyboard input as KEY_EVENT records for ReadConsoleInputW consumers.
-    // ENABLE_VIRTUAL_TERMINAL_INPUT is for byte-stream readers (ReadFile/ReadConsole)
-    // and can prevent reliable key event delivery.
-    const new_mode = ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT;
+    const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
+    const ENABLE_LINE_INPUT: u32 = 0x0002;
+    const ENABLE_ECHO_INPUT: u32 = 0x0004;
+    const ENABLE_QUICK_EDIT_MODE: u32 = 0x0040;
+
+    var new_mode = handle.original_input_mode;
+    new_mode |= ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT;
+    new_mode &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_QUICK_EDIT_MODE);
     _ = kernel32.SetConsoleMode(handle.stdin_handle, new_mode);
 }
 
