@@ -492,9 +492,14 @@ pub const App = struct {
             // Check for quit key (Ctrl+C or Ctrl+Q)
             if (evt == .key) {
                 const key_event = evt.key;
-                if (key_event.modifiers.ctrl) {
-                    if (key_event.key == .char) {
-                        const c = key_event.key.char;
+                if (key_event.key == .char) {
+                    const c = key_event.key.char;
+                    // Some terminals deliver Ctrl+C as ETX (0x03), others as Ctrl+'c'.
+                    if (c == 0x03) {
+                        self.should_quit = true;
+                        return;
+                    }
+                    if (key_event.modifiers.ctrl) {
                         if (c == 'c' or c == 'q' or c == 'C' or c == 'Q') {
                             self.should_quit = true;
                             return;
@@ -511,7 +516,7 @@ pub const App = struct {
             // Pass to root widget
             if (self.root != null and self.root_event_fn != null) {
                 const result = self.root_event_fn.?(self.root.?, evt);
-                if (result == .needs_redraw) {
+                if (result != .ignored) {
                     self.needs_redraw = true;
                 }
             }
