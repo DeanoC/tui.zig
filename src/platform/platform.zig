@@ -230,10 +230,10 @@ fn enableWindowsRawMode(handle: *WindowsHandle) !void {
     const ENABLE_EXTENDED_FLAGS: u32 = 0x0080;
     const ENABLE_WINDOW_INPUT: u32 = 0x0008;
     const ENABLE_MOUSE_INPUT: u32 = 0x0010;
-    const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
-
-    // Disable line input, echo, and enable VT input
-    const new_mode = ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT;
+    // Keep keyboard input as KEY_EVENT records for ReadConsoleInputW consumers.
+    // ENABLE_VIRTUAL_TERMINAL_INPUT is for byte-stream readers (ReadFile/ReadConsole)
+    // and can prevent reliable key event delivery.
+    const new_mode = ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT;
     _ = kernel32.SetConsoleMode(handle.stdin_handle, new_mode);
 }
 
