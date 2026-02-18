@@ -138,6 +138,7 @@ pub const App = struct {
             .theme = config.theme,
             .input_reader = input.InputReader.init(allocator),
             .event_queue = events.EventQueue.init(allocator, 256),
+            .fps_counter = animation.FpsCounter.init(),
         };
     }
 
@@ -149,6 +150,7 @@ pub const App = struct {
             .theme = config.theme,
             .input_reader = input.InputReader.init(allocator),
             .event_queue = events.EventQueue.init(allocator, 256),
+            .fps_counter = animation.FpsCounter.init(),
         };
     }
 
@@ -156,7 +158,7 @@ pub const App = struct {
     pub fn deinit(self: *App) void {
         // Signal input thread to stop
         self.should_quit = true;
-        
+
         // Wait for input thread to finish
         if (self.input_thread) |thread| {
             thread.join();
@@ -493,4 +495,6 @@ test "app creation" {
     defer app.deinit();
 
     try std.testing.expect(app.state == .uninitialized);
+    try std.testing.expect(app.fps_counter.total_time == 960);
+    try std.testing.expect(app.fps_counter.index == 0);
 }
